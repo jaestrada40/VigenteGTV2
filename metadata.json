@@ -1,0 +1,6 @@
+{
+  "name": "Vigente GT",
+  "description": "Plataforma de alertas para evitar el vencimiento del DPI y de la licencia de conducir en Guatemala.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
