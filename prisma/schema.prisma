@@ -22,13 +22,77 @@ enum DeliveryStatus {
   FAILED
 }
 
+enum AccountTokenType {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
+enum ConsentType {
+  TERMS
+  PRIVACY
+  ALERT_EMAILS
+}
+
+enum EmailCategory {
+  VERIFICATION
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+  REMINDER
+}
+
 model User {
   id           String     @id @default(cuid())
   email        String     @unique
   passwordHash String
   role         Role       @default(USER)
   createdAt    DateTime   @default(now())
+  emailVerifiedAt DateTime?
+  sessionVersion  Int        @default(0)
   documents    Document[]
+  accountTokens AccountToken[]
+  consents      ConsentRecord[]
+  emailDeliveries EmailDelivery[]
+}
+
+model AccountToken {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      AccountTokenType
+  tokenHash String           @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+model ConsentRecord {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      ConsentType
+  version   String
+  ipAddress String?
+  createdAt DateTime    @default(now())
+
+  @@index([userId, type])
+}
+
+model EmailDelivery {
+  id                String         @id @default(cuid())
+  userId            String?
+  user              User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  recipientEmail    String
+  category          EmailCategory
+  deliveryStatus    DeliveryStatus
+  providerMessageId String?
+  errorMessage      String?
+  createdAt         DateTime       @default(now())
+
+  @@index([createdAt])
+  @@index([category, deliveryStatus])
 }
 
 model Document {

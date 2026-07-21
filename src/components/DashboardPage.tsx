@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Document, DocType, User, ViewType } from '../types';
 import { CreditCard, Calendar, Plus, Trash2, AlertTriangle, CheckCircle2, ShieldAlert, Sparkles, Clock, FileText, ArrowRight, ShieldCheck } from 'lucide-react';
+import { api } from '../api';
 
 interface DashboardPageProps {
   currentUser: User;
@@ -66,6 +67,7 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
   const [expiryDate, setExpiryDate] = useState('');
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
+  const [verificationMessage,setVerificationMessage]=useState('');
 
   // Filter documents belonging to the current user
   const userDocuments = documents.filter(doc => doc.userEmail.toLowerCase() === currentUser.email.toLowerCase());
@@ -97,6 +99,7 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-10" id="dashboard-container">
+      {!currentUser.emailVerified&&<div className="mb-8 flex flex-col gap-3 rounded border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between"><div><strong>Verifica tu correo para activar alertas.</strong><p className="mt-1 text-xs">Revisa tu bandeja y spam. No podrás agregar documentos hasta verificarlo.</p>{verificationMessage&&<p className="mt-2 text-xs font-bold">{verificationMessage}</p>}</div><button onClick={async()=>{try{const result=await api.resendVerification();setVerificationMessage(result.message);}catch(error){setVerificationMessage(error instanceof Error?error.message:'No se pudo reenviar.');}}} className="rounded bg-amber-900 px-4 py-2 text-xs font-bold text-white">Reenviar correo</button></div>}
       
       {/* Welcome Banner */}
       <div className="mb-10 flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-200 pb-8 gap-4">

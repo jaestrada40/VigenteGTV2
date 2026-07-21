@@ -5,6 +5,7 @@ export interface User {
   email: string;
   createdAt: string;
   isAdmin: boolean;
+  emailVerified: boolean;
 }
 
 export interface Document {
@@ -28,4 +29,4 @@ export interface NotificationLog {
   deliveryStatus?: 'SENT' | 'FAILED';
 }
 
-export type ViewType = 'landing' | 'login' | 'register' | 'dashboard' | 'admin';
+export type ViewType = 'landing' | 'login' | 'register' | 'dashboard' | 'admin' | 'security' | 'privacy' | 'terms';
