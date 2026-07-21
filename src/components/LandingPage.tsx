@@ -58,7 +58,7 @@ export default function LandingPage({ setView }: LandingPageProps) {
             <span className="hidden sm:block h-4 w-px bg-slate-300"></span>
             <span className="flex items-center space-x-2">
               <Mail className="h-4 w-4 text-brand-teal shrink-0" />
-              <span>Notificaciones garantizadas</span>
+              <span>Notificaciones configurables</span>
             </span>
             <span className="hidden sm:block h-4 w-px bg-slate-300"></span>
             <span className="flex items-center space-x-2">

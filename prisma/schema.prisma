@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum DocumentType {
+  DPI
+  LICENCIA
+}
+
+enum DeliveryStatus {
+  SENT
+  FAILED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  role         Role       @default(USER)
+  createdAt    DateTime   @default(now())
+  documents    Document[]
+}
+
+model Document {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          DocumentType
+  name          String
+  expiryDate    DateTime           @db.Date
+  createdAt     DateTime           @default(now())
+  notifications NotificationLog[]
+
+  @@index([userId])
+  @@index([expiryDate])
+}
+
+model NotificationLog {
+  id             String         @id @default(cuid())
+  documentId     String
+  document       Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  recipientEmail String
+  statusLabel    String
+  deliveryStatus DeliveryStatus
+  reminderKey    String?        @unique
+  errorMessage   String?
+  sentAt         DateTime       @default(now())
+
+  @@index([documentId])
+  @@index([sentAt])
+}

@@ -7,9 +7,9 @@ interface AdminPanelProps {
   users: User[];
   documents: Document[];
   notificationLogs: NotificationLog[];
-  onDeleteUser: (userId: string) => void;
-  onDeleteDocument: (docId: string) => void;
-  onResendNotification: (doc: Document) => void;
+  onDeleteUser: (userId: string) => Promise<void>;
+  onDeleteDocument: (docId: string) => Promise<void>;
+  onResendNotification: (doc: Document) => Promise<void>;
   setView: (view: ViewType) => void;
 }
 
@@ -32,9 +32,8 @@ export default function AdminPanel({
   const licenciaCount = documents.filter(d => d.type === 'Licencia').length;
   const totalNotificationsSent = notificationLogs.length;
 
-  const handleResendClick = (doc: Document) => {
-    onResendNotification(doc);
-    
+  const handleResendClick = async (doc: Document) => {
+    await onResendNotification(doc);
     setToastMessage(`Aviso enviado con éxito a ${doc.userEmail} para su ${doc.type} (${doc.name || 'Sin etiqueta'})`);
     
     setTimeout(() => {
@@ -43,11 +42,6 @@ export default function AdminPanel({
   };
 
   const handleUserDelete = (user: User) => {
-    if (user.email === 'javiera.estradag@gmail.com') {
-      alert('Por cuestiones de prueba, no permitimos eliminar la cuenta semilla javiera.estradag@gmail.com para evitar quedar con un panel vacío.');
-      return;
-    }
-    
     if (confirm(`¿Está seguro de que desea eliminar la cuenta de ${user.email}?\nSe borrarán todos sus documentos (${documents.filter(d => d.userId === user.id).length}) y dejará de recibir alertas de manera irreversible.`)) {
       onDeleteUser(user.id);
     }
@@ -253,7 +247,7 @@ export default function AdminPanel({
                 Listado de Documentos Monitoreados
               </h2>
               <p className="text-xs text-slate-500 font-sans mt-0.5">
-                Tabla general con todas las fechas de expiración. Permite reenviar avisos simulados por correo a los dueños correspondientes.
+                Tabla general con todas las fechas de expiración. Permite enviar avisos reales por correo a los dueños correspondientes.
               </p>
             </div>
             <span className="rounded bg-slate-200/70 px-2.5 py-1 text-[10px] font-mono font-bold text-slate-600 uppercase tracking-wider border border-slate-300/50">
@@ -326,7 +320,7 @@ export default function AdminPanel({
                               id={`btn-admin-resend-${doc.id}`}
                               onClick={() => handleResendClick(doc)}
                               className="flex items-center space-x-1.5 rounded border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-mono font-bold text-slate-700 uppercase tracking-wider hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer"
-                              title="Enviar correo simulado de alerta"
+                              title="Enviar correo de alerta"
                             >
                               <Send className="h-3 w-3 text-brand-teal" />
                               <span>Reenviar aviso</span>
@@ -373,26 +367,23 @@ export default function AdminPanel({
               </div>
             </div>
             
-            <button
-              onClick={() => alert('Simulador: Todas las alertas diarias automáticas han sido verificadas con el servidor de correos.')}
-              className="rounded bg-slate-800 px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-300 hover:bg-slate-700 transition-colors flex items-center space-x-1 border border-slate-700 cursor-pointer"
-            >
+            <span className="rounded bg-slate-800 px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1 border border-slate-700">
               <RefreshCw className="h-3 w-3 text-brand-teal" />
-              <span>Verificar SMTP</span>
-            </button>
+              <span>Envíos reales</span>
+            </span>
           </div>
 
           <div className="space-y-3 font-mono text-xs max-h-56 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-800 pr-2">
             {notificationLogs.length === 0 ? (
               <p className="text-slate-500 italic py-4 text-center">
-                Ninguna notificación enviada aún en esta sesión de simulación.
+                Todavía no hay notificaciones registradas.
               </p>
             ) : (
               [...notificationLogs].reverse().map((log) => (
                 <div key={log.id} className="p-3 bg-slate-950/60 rounded-lg border border-slate-850 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div className="space-y-1">
                     <span className="text-brand-teal font-bold">[VIGENTE_GT_MAILER]</span>
-                    <span className="text-slate-400"> Correo enviado a </span>
+                    <span className="text-slate-400"> {log.deliveryStatus === 'FAILED' ? 'Entrega fallida a ' : 'Correo enviado a '} </span>
                     <strong className="text-white font-semibold">{log.userEmail}</strong>
                     <span className="text-slate-400"> para su </span>
                     <span className="text-slate-200 underline">{log.docType} ({log.docName})</span>
@@ -405,6 +396,9 @@ export default function AdminPanel({
                       'bg-orange-950 text-orange-400 border border-orange-900/30'
                     }`}>
                       {log.status}
+                    </span>
+                    <span className={log.deliveryStatus === 'FAILED' ? 'text-red-400' : 'text-emerald-400'}>
+                      {log.deliveryStatus === 'FAILED' ? 'FALLÓ' : 'ENTREGADO'}
                     </span>
                     <span className="text-slate-500">
                       {new Date(log.sentAt).toLocaleTimeString('es-GT')}
