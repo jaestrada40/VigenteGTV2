@@ -1,7 +1,8 @@
 import { FormEvent, useState } from 'react';
 import { User, ViewType } from '../types';
-import { ShieldCheck, Mail, Lock, AlertCircle, LogIn } from 'lucide-react';
+import { ShieldCheck, Mail, AlertCircle, LogIn } from 'lucide-react';
 import { api } from '../api';
+import PasswordInput from './PasswordInput';
 
 interface LoginPageProps { setView: (view: ViewType) => void; onLoginSuccess: (user: User) => Promise<void>; }
 
@@ -31,7 +32,7 @@ export default function LoginPage({ setView, onLoginSuccess }: LoginPageProps) {
           {error && <div className="flex gap-2 rounded bg-red-50 p-3.5 text-xs text-red-600 border border-red-100"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}
           {message&&<div className="rounded border border-emerald-100 bg-emerald-50 p-3.5 text-xs text-emerald-700">{message}</div>}
           <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase">Correo electrónico<div className="relative mt-2"><Mail className="absolute left-3.5 top-3 h-4 w-4 text-slate-400"/><input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full rounded border border-slate-200 bg-slate-50/40 py-2.5 pl-10 pr-4 text-sm" placeholder="ejemplo@correo.gt"/></div></label>
-          {!forgotMode&&<label className="block text-[10px] font-mono font-bold text-slate-500 uppercase">Contraseña<div className="relative mt-2"><Lock className="absolute left-3.5 top-3 h-4 w-4 text-slate-400"/><input type="password" required autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full rounded border border-slate-200 bg-slate-50/40 py-2.5 pl-10 pr-4 text-sm" placeholder="••••••••••"/></div></label>}
+          {!forgotMode&&<PasswordInput label="Contraseña" value={password} onChange={setPassword} autoComplete="current-password" placeholder="••••••••••" />}
           <button disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded bg-brand-teal py-3 text-xs font-mono font-bold text-white uppercase disabled:opacity-60"><LogIn className="h-4 w-4"/>{submitting ? 'Procesando…' : forgotMode?'Enviar enlace':'Iniciar sesión'}</button>
           <button type="button" onClick={()=>{setForgotMode(!forgotMode);setError('');setMessage('');}} className="w-full text-xs font-bold text-brand-blue">{forgotMode?'Volver al inicio de sesión':'¿Olvidaste tu contraseña?'}</button>
         </form>

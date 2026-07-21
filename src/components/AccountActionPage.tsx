@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
 import { CheckCircle2, AlertCircle, Lock } from 'lucide-react';
+import PasswordInput from './PasswordInput';
 
 interface Props { verifyToken?: string; resetToken?: string; onDone: () => void; }
 export default function AccountActionPage({ verifyToken, resetToken, onDone }: Props) {
@@ -12,7 +13,7 @@ export default function AccountActionPage({ verifyToken, resetToken, onDone }: P
     {error?<AlertCircle className="mx-auto h-10 w-10 text-red-500"/>:<CheckCircle2 className="mx-auto h-10 w-10 text-brand-teal"/>}
     <h1 className="mt-4 text-2xl font-extrabold text-brand-blue-dark">{verifyToken?'Verificación de correo':'Nueva contraseña'}</h1>
     {message&&<p className="mt-3 text-sm text-slate-600">{message}</p>}{error&&<p className="mt-3 text-sm text-red-600">{error}</p>}
-    {resetToken&&!message&&<form onSubmit={reset} className="mt-6 space-y-4 text-left"><label className="text-xs font-bold text-slate-600">Contraseña nueva<input className="mt-2 w-full rounded border p-3" type="password" minLength={12} required value={password} onChange={e=>setPassword(e.target.value)}/></label><label className="text-xs font-bold text-slate-600">Confirmar contraseña<input className="mt-2 w-full rounded border p-3" type="password" required value={confirmation} onChange={e=>setConfirmation(e.target.value)}/></label><button disabled={busy} className="flex w-full justify-center gap-2 rounded bg-brand-teal p-3 text-xs font-bold uppercase text-white"><Lock className="h-4 w-4"/>Actualizar contraseña</button></form>}
+    {resetToken&&!message&&<form onSubmit={reset} className="mt-6 space-y-4 text-left"><PasswordInput label="Contraseña nueva" value={password} onChange={setPassword} minLength={12} autoComplete="new-password" compact/><PasswordInput label="Confirmar contraseña" value={confirmation} onChange={setConfirmation} autoComplete="new-password" compact/><button disabled={busy} className="flex w-full justify-center gap-2 rounded bg-brand-teal p-3 text-xs font-bold uppercase text-white"><Lock className="h-4 w-4"/>Actualizar contraseña</button></form>}
     {(message||error)&&!busy&&<button onClick={onDone} className="mt-6 rounded border border-slate-200 px-5 py-2 text-sm font-bold text-brand-blue">Ir a iniciar sesión</button>}
   </div></div>;
 }

@@ -229,6 +229,39 @@ app.post('/api/auth/change-password', authLimiter, requireAuth, async (req, res)
   res.cookie('vigentegt_session', signSession(updated), cookieOptions).json({ message: 'Contraseña actualizada.' });
 });
 
+app.get('/api/account/export', requireAuth, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.authUser!.id },
+    include: {
+      consents: { orderBy: { createdAt: 'asc' } },
+      documents: { include: { notifications: true }, orderBy: { createdAt: 'asc' } },
+      emailDeliveries: { orderBy: { createdAt: 'asc' } },
+    },
+  });
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+  res.setHeader('Content-Disposition', `attachment; filename="vigentegt-datos-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.json({
+    exportedAt: new Date().toISOString(),
+    account: { id: user.id, email: user.email, role: user.role, createdAt: user.createdAt, emailVerifiedAt: user.emailVerifiedAt },
+    consents: user.consents.map(({ type, version, createdAt }) => ({ type, version, createdAt })),
+    documents: user.documents,
+    emailDeliveries: user.emailDeliveries.map(({ recipientEmail, category, deliveryStatus, createdAt }) => ({ recipientEmail, category, deliveryStatus, createdAt })),
+  });
+});
+
+app.delete('/api/account', authLimiter, requireAuth, async (req, res) => {
+  const { password, confirmation } = z.object({ password: z.string().min(1).max(128), confirmation: z.literal('ELIMINAR') }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
+  if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(400).json({ error: 'La contraseña es incorrecta.' });
+  if (user.role === 'ADMIN') return res.status(403).json({ error: 'La cuenta administradora no puede eliminarse desde la aplicación.' });
+  await prisma.$transaction([
+    prisma.emailDelivery.deleteMany({ where: { userId: user.id } }),
+    prisma.user.delete({ where: { id: user.id } }),
+  ]);
+  req.log.info({ deletedUserId: user.id }, 'user deleted own account');
+  res.clearCookie('vigentegt_session', { ...cookieOptions, maxAge: undefined }).status(204).end();
+});
+
 const serializeDocument = (doc: any) => ({ id: doc.id, userId: doc.userId, userEmail: doc.user?.email || '', type: doc.type === 'LICENCIA' ? 'Licencia' : 'DPI', name: doc.name, expiryDate: doc.expiryDate.toISOString().slice(0, 10), createdAt: doc.createdAt.toISOString() });
 
 app.get('/api/documents', requireAuth, async (req, res) => {

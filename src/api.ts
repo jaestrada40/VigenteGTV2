@@ -24,4 +24,6 @@ export const api = {
   resetPassword: (token: string, password: string) => request<{ message: string }>('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) }),
   changePassword: (currentPassword: string, newPassword: string) => request<{ message: string }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
   smtpHealth: () => request<{ ok: boolean }>('/api/admin/smtp-health'),
+  exportAccount: () => request<Record<string, unknown>>('/api/account/export'),
+  deleteAccount: (password: string, confirmation: string) => request<void>('/api/account', { method: 'DELETE', body: JSON.stringify({ password, confirmation }) }),
 };

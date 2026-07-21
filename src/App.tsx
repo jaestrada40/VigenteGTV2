@@ -10,8 +10,10 @@ import { api } from './api';
 import LegalPage from './components/LegalPage';
 import AccountActionPage from './components/AccountActionPage';
 import SecurityPage from './components/SecurityPage';
+import { useToast } from './components/ToastProvider';
 
 export default function App() {
+  const { toast } = useToast();
   const [users, setUsers] = useState<User[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [notificationLogs, setNotificationLogs] = useState<NotificationLog[]>([]);
@@ -62,6 +64,10 @@ export default function App() {
     setView('landing');
   };
 
+  const handleAccountDeleted = () => {
+    setCurrentUser(null); setUsers([]); setDocuments([]); setNotificationLogs([]); setView('landing');
+  };
+
   const handleAddDocument = async (type: DocType, name: string, expiryDate: string) => {
     const { document } = await api.addDocument({ type, name: name || `Mi ${type}`, expiryDate });
     setDocuments(previous => [document, ...previous]);
@@ -71,7 +77,8 @@ export default function App() {
     try {
       await api.deleteDocument(id);
       setDocuments(previous => previous.filter(document => document.id !== id));
-    } catch (error) { alert(error instanceof Error ? error.message : 'No se pudo eliminar el documento.'); }
+      toast('Documento eliminado correctamente.', 'success');
+    } catch (error) { toast(error instanceof Error ? error.message : 'No se pudo eliminar el documento.', 'error'); }
   };
 
   const handleDeleteUser = async (id: string) => {
@@ -79,16 +86,16 @@ export default function App() {
       await api.deleteUser(id);
       setUsers(previous => previous.filter(user => user.id !== id));
       setDocuments(previous => previous.filter(document => document.userId !== id));
-    } catch (error) { alert(error instanceof Error ? error.message : 'No se pudo eliminar el usuario.'); }
+      toast('Usuario y sus documentos fueron eliminados.', 'success');
+    } catch (error) { toast(error instanceof Error ? error.message : 'No se pudo eliminar el usuario.', 'error'); }
   };
 
   const handleResendNotification = async (document: Document) => {
     try {
       await api.notify(document.id);
       if (currentUser) await loadData(currentUser);
-      alert(`Correo entregado a ${document.userEmail}.`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'No se pudo enviar el correo.');
+      toast(error instanceof Error ? error.message : 'No se pudo enviar el correo.', 'error');
       throw error;
     }
   };
@@ -110,7 +117,7 @@ export default function App() {
         {safeView === 'login' && <LoginPage setView={setView} onLoginSuccess={handleAuthenticated} />}
         {safeView === 'dashboard' && currentUser && <DashboardPage currentUser={currentUser} documents={documents} onAddDocument={handleAddDocument} onDeleteDocument={handleDeleteDocument} setView={setView} />}
         {safeView === 'admin' && currentUser?.isAdmin && <AdminPanel users={users} documents={documents} notificationLogs={notificationLogs} onDeleteUser={handleDeleteUser} onDeleteDocument={handleDeleteDocument} onResendNotification={handleResendNotification} setView={setView} />}
-        {safeView === 'security' && currentUser && <SecurityPage setView={setView} />}
+        {safeView === 'security' && currentUser && <SecurityPage setView={setView} isAdmin={currentUser.isAdmin} onAccountDeleted={handleAccountDeleted} />}
         {safeView === 'privacy' && <LegalPage type="privacy" setView={setView} />}
         {safeView === 'terms' && <LegalPage type="terms" setView={setView} />}
         </>}
