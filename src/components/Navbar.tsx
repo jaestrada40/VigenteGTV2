@@ -6,14 +6,10 @@ interface NavbarProps {
   currentView: ViewType;
   setView: (view: ViewType) => void;
   currentUser: User | null;
-  setCurrentUser: (user: User | null) => void;
+  onLogout: () => Promise<void>;
 }
 
-export default function Navbar({ currentView, setView, currentUser, setCurrentUser }: NavbarProps) {
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setView('landing');
-  };
+export default function Navbar({ currentView, setView, currentUser, onLogout }: NavbarProps) {
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
@@ -89,18 +85,6 @@ export default function Navbar({ currentView, setView, currentUser, setCurrentUs
                     <span>USER: <strong className="font-medium text-slate-700">{currentUser.email}</strong></span>
                   </span>
                   
-                  {/* Option to view Admin Panel directly for testing purposes */}
-                  <button
-                    id="btn-nav-admin-shortcut"
-                    onClick={() => {
-                      setView('admin');
-                    }}
-                    className="font-mono text-[10px] font-medium text-slate-400 hover:text-brand-blue transition-colors px-2 py-1 bg-slate-50 hover:bg-slate-100 rounded border border-slate-200"
-                    title="Simular vista de administrador"
-                  >
-                    Simular Admin
-                  </button>
-
                   <button
                     id="btn-nav-dashboard"
                     onClick={() => setView('dashboard')}
@@ -114,7 +98,7 @@ export default function Navbar({ currentView, setView, currentUser, setCurrentUs
               {/* Log Out CTA */}
               <button
                 id="btn-nav-logout"
-                onClick={handleLogout}
+                onClick={onLogout}
                 className="flex items-center space-x-1.5 rounded border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-95 cursor-pointer"
               >
                 <LogOut className="h-3.5 w-3.5" />

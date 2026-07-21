@@ -5,13 +5,13 @@ import { CreditCard, Calendar, Plus, Trash2, AlertTriangle, CheckCircle2, Shield
 interface DashboardPageProps {
   currentUser: User;
   documents: Document[];
-  onAddDocument: (type: DocType, name: string, date: string) => void;
-  onDeleteDocument: (id: string) => void;
+  onAddDocument: (type: DocType, name: string, date: string) => Promise<void>;
+  onDeleteDocument: (id: string) => Promise<void>;
   setView: (view: ViewType) => void;
 }
 
-// Helper to determine status and colors relative to 2026-07-20
-export function getDocumentStatus(expiryDateStr: string, currentDateStr: string = '2026-07-20') {
+// Helper to determine status against the current calendar date.
+export function getDocumentStatus(expiryDateStr: string, currentDateStr: string = new Date().toISOString().slice(0, 10)) {
   if (!expiryDateStr) return { daysLeft: 0, status: 'desconocido', label: 'Sin fecha', colorClass: '', badgeClass: '' };
   
   const expiry = new Date(expiryDateStr);
@@ -70,7 +70,7 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
   // Filter documents belonging to the current user
   const userDocuments = documents.filter(doc => doc.userEmail.toLowerCase() === currentUser.email.toLowerCase());
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
     setFormSuccess('');
@@ -80,13 +80,15 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
       return;
     }
 
-    // Call state modifier
-    onAddDocument(docType, docName.trim(), expiryDate);
-    
-    // Reset and success state
-    setFormSuccess(`¡${docType} agregado con éxito! Hemos programado tus alertas de correo.`);
-    setDocName('');
-    setExpiryDate('');
+    try {
+      await onAddDocument(docType, docName.trim(), expiryDate);
+      setFormSuccess(`¡${docType} agregado con éxito! Hemos programado tus alertas de correo.`);
+      setDocName('');
+      setExpiryDate('');
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'No fue posible agregar el documento.');
+      return;
+    }
 
     setTimeout(() => {
       setFormSuccess('');
@@ -103,7 +105,7 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
             Mi Panel de Documentos
           </h1>
           <p className="mt-1.5 text-sm text-slate-500 font-sans">
-            Gestiona los recordatorios para tus documentos clave de Guatemala. Hoy es <strong className="text-brand-blue-dark font-mono font-bold">20 de julio, 2026</strong>.
+            Gestiona los recordatorios para tus documentos clave de Guatemala. Hoy es <strong className="text-brand-blue-dark font-mono font-bold">{new Date().toLocaleDateString('es-GT', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.
           </p>
         </div>
 

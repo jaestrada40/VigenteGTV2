@@ -3,9 +3,8 @@ export type DocType = 'DPI' | 'Licencia';
 export interface User {
   id: string;
   email: string;
-  password?: string;
   createdAt: string;
-  isAdmin?: boolean;
+  isAdmin: boolean;
 }
 
 export interface Document {
@@ -26,6 +25,7 @@ export interface NotificationLog {
   expiryDate: string;
   sentAt: string;
   status: 'Vence pronto' | 'Vencido' | 'Urgente';
+  deliveryStatus?: 'SENT' | 'FAILED';
 }
 
 export type ViewType = 'landing' | 'login' | 'register' | 'dashboard' | 'admin';
