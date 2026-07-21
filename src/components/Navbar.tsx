@@ -1,6 +1,6 @@
 import React from 'react';
 import { ViewType, User } from '../types';
-import { ShieldAlert, LogOut, ShieldCheck, LayoutDashboard, UserCheck } from 'lucide-react';
+import { ShieldAlert, LogOut, ShieldCheck, LayoutDashboard, UserCheck, Lock } from 'lucide-react';
 
 interface NavbarProps {
   currentView: ViewType;
@@ -96,6 +96,7 @@ export default function Navbar({ currentView, setView, currentUser, onLogout }: 
               )}
 
               {/* Log Out CTA */}
+              <button onClick={() => setView('security')} className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-brand-blue"><Lock className="h-3.5 w-3.5"/><span>Seguridad</span></button>
               <button
                 id="btn-nav-logout"
                 onClick={onLogout}

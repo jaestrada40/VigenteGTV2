@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
@@ -9,52 +10,77 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
-import { PrismaClient, Role } from '@prisma/client';
+import { pinoHttp } from 'pino-http';
+import pino from 'pino';
+import { collectDefaultMetrics, Counter, Histogram, register } from 'prom-client';
+import { PrismaClient, Role, EmailCategory } from '@prisma/client';
 import { z } from 'zod';
 
-const prisma = new PrismaClient();
-const app = express();
+export const prisma = new PrismaClient();
+export const app = express();
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
-const jwtSecret = process.env.JWT_SECRET;
+const jwtSecret = process.env.JWT_SECRET || (process.env.NODE_ENV === 'test' ? 'test-secret-that-is-at-least-32-characters' : '');
+const publicAppUrl = (process.env.PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+const legalVersion = process.env.LEGAL_VERSION || '2026-07-21';
+const logger = pino({ level: process.env.LOG_LEVEL || 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'password', 'token'] });
 
-if (!jwtSecret || jwtSecret.length < 32) {
-  throw new Error('JWT_SECRET debe existir y contener al menos 32 caracteres.');
-}
+if (jwtSecret.length < 32) throw new Error('JWT_SECRET debe existir y contener al menos 32 caracteres.');
 
 declare global {
   namespace Express {
-    interface Request { authUser?: { id: string; role: Role } }
+    interface Request { authUser?: { id: string; role: Role; emailVerifiedAt: Date | null; sessionVersion: number } }
   }
 }
+
+collectDefaultMetrics({ prefix: 'vigentegt_' });
+const httpRequests = new Counter({ name: 'vigentegt_http_requests_total', help: 'Solicitudes HTTP', labelNames: ['method', 'route', 'status'] });
+const httpDuration = new Histogram({ name: 'vigentegt_http_request_duration_seconds', help: 'Duración de solicitudes HTTP', labelNames: ['method', 'route', 'status'], buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5] });
+const emailDeliveries = new Counter({ name: 'vigentegt_email_deliveries_total', help: 'Intentos de entrega de correo', labelNames: ['category', 'status'] });
 
 app.set('trust proxy', 1);
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet({
+  contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], fontSrc: ["'self'", 'data:'], objectSrc: ["'none'"], frameAncestors: ["'none'"], upgradeInsecureRequests: isProduction ? [] : null } },
+  crossOriginEmbedderPolicy: false,
+}));
+app.use(pinoHttp({ logger, genReqId: (req) => String(req.headers['x-request-id'] || crypto.randomUUID()) }));
 app.use(express.json({ limit: '32kb' }));
 app.use(cookieParser());
-
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
-const cookieOptions = { httpOnly: true, secure: isProduction, sameSite: 'lax' as const, maxAge: 7 * 24 * 60 * 60 * 1000 };
-
-const safeUser = (user: { id: string; email: string; role: Role; createdAt: Date }) => ({
-  id: user.id,
-  email: user.email,
-  isAdmin: user.role === 'ADMIN',
-  createdAt: user.createdAt.toISOString(),
+app.use((req, res, next) => {
+  const end = httpDuration.startTimer();
+  res.on('finish', () => {
+    const route = req.route?.path || req.path;
+    const labels = { method: req.method, route, status: String(res.statusCode) };
+    httpRequests.inc(labels);
+    end(labels);
+  });
+  next();
 });
 
-function signSession(user: { id: string; role: Role }) {
-  return jwt.sign({ sub: user.id, role: user.role }, jwtSecret!, { expiresIn: '7d' });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false });
+const emailLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false });
+const cookieOptions = { httpOnly: true, secure: isProduction, sameSite: 'lax' as const, maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' };
+
+type SafeUserInput = { id: string; email: string; role: Role; createdAt: Date; emailVerifiedAt: Date | null };
+const safeUser = (user: SafeUserInput) => ({ id: user.id, email: user.email, isAdmin: user.role === 'ADMIN', emailVerified: Boolean(user.emailVerifiedAt), createdAt: user.createdAt.toISOString() });
+const passwordSchema = z.string().min(12, 'La contraseña debe tener al menos 12 caracteres.').max(128).refine(value => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value), 'Incluye mayúscula, minúscula y número.');
+const emailSchema = z.string().email().max(254).transform(value => value.trim().toLowerCase());
+const credentialsSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128) });
+const registerSchema = z.object({ email: emailSchema, password: passwordSchema, acceptedTerms: z.literal(true), acceptedPrivacy: z.literal(true), alertConsent: z.literal(true) });
+const documentSchema = z.object({ type: z.enum(['DPI', 'Licencia']), name: z.string().trim().min(1).max(80), expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+
+function signSession(user: { id: string; role: Role; sessionVersion: number }) {
+  return jwt.sign({ sub: user.id, role: user.role, sv: user.sessionVersion }, jwtSecret, { expiresIn: '7d', issuer: 'vigentegt', audience: 'vigentegt-web' });
 }
 
-function requireAuth(req: Request, res: Response, next: NextFunction) {
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    const payload = jwt.verify(req.cookies.vigentegt_session || '', jwtSecret!) as jwt.JwtPayload;
-    req.authUser = { id: String(payload.sub), role: payload.role as Role };
+    const payload = jwt.verify(req.cookies.vigentegt_session || '', jwtSecret, { issuer: 'vigentegt', audience: 'vigentegt-web' }) as jwt.JwtPayload;
+    const user = await prisma.user.findUnique({ where: { id: String(payload.sub) }, select: { id: true, role: true, emailVerifiedAt: true, sessionVersion: true } });
+    if (!user || user.sessionVersion !== payload.sv) throw new Error('invalid session');
+    req.authUser = user;
     next();
-  } catch {
-    res.status(401).json({ error: 'Tu sesión no es válida o ha expirado.' });
-  }
+  } catch { res.status(401).json({ error: 'Tu sesión no es válida o ha expirado.' }); }
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -62,22 +88,81 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-const credentialsSchema = z.object({ email: z.string().email().max(254).transform(v => v.trim().toLowerCase()), password: z.string().min(10).max(128) });
-const documentSchema = z.object({
-  type: z.enum(['DPI', 'Licencia']),
-  name: z.string().trim().min(1).max(80),
-  expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-});
+function requireVerified(req: Request, res: Response, next: NextFunction) {
+  if (!req.authUser?.emailVerifiedAt) return res.status(403).json({ error: 'Verifica tu correo antes de activar documentos y alertas.', code: 'EMAIL_NOT_VERIFIED' });
+  next();
+}
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+function mailTransport() {
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD } = process.env;
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASSWORD) return null;
+  return nodemailer.createTransport({ host: SMTP_HOST, port: Number(SMTP_PORT), secure: process.env.SMTP_SECURE === 'true', auth: { user: SMTP_USER, pass: SMTP_PASSWORD }, connectionTimeout: 10_000, socketTimeout: 15_000 });
+}
+
+async function sendSystemEmail(input: { userId?: string; to: string; category: EmailCategory; subject: string; text: string; html: string }) {
+  const transport = mailTransport();
+  let deliveryStatus: 'SENT' | 'FAILED' = 'FAILED';
+  let providerMessageId: string | undefined;
+  let errorMessage: string | undefined;
+  try {
+    if (!transport) throw new Error('SMTP no está configurado.');
+    const result = await transport.sendMail({ from: process.env.MAIL_FROM || process.env.SMTP_USER, to: input.to, subject: input.subject, text: input.text, html: input.html });
+    providerMessageId = result.messageId;
+    deliveryStatus = 'SENT';
+  } catch (error) { errorMessage = error instanceof Error ? error.message.slice(0, 500) : 'Error de correo'; }
+  await prisma.emailDelivery.create({ data: { userId: input.userId, recipientEmail: input.to, category: input.category, deliveryStatus, providerMessageId, errorMessage } });
+  emailDeliveries.inc({ category: input.category, status: deliveryStatus });
+  logger.info({ category: input.category, deliveryStatus, recipientDomain: input.to.split('@')[1] }, 'email delivery completed');
+  return deliveryStatus === 'SENT';
+}
+
+function hashToken(token: string) { return crypto.createHash('sha256').update(token).digest('hex'); }
+
+async function issueAccountToken(user: { id: string; email: string }, type: 'VERIFY_EMAIL' | 'RESET_PASSWORD') {
+  await prisma.accountToken.deleteMany({ where: { userId: user.id, type, usedAt: null } });
+  const rawToken = crypto.randomBytes(32).toString('base64url');
+  await prisma.accountToken.create({ data: { userId: user.id, type, tokenHash: hashToken(rawToken), expiresAt: new Date(Date.now() + (type === 'VERIFY_EMAIL' ? 24 * 60 * 60 * 1000 : 30 * 60 * 1000)) } });
+  return rawToken;
+}
+
+async function sendVerification(user: { id: string; email: string }) {
+  const token = await issueAccountToken(user, 'VERIFY_EMAIL');
+  const url = `${publicAppUrl}/?verify=${encodeURIComponent(token)}`;
+  return sendSystemEmail({ userId: user.id, to: user.email, category: 'VERIFICATION', subject: 'Verifica tu correo — Vigente GT', text: `Verifica tu correo abriendo este enlace: ${url}`, html: `<h2>Confirma tu correo</h2><p>Activa tus alertas de Vigente GT:</p><p><a href="${url}">Verificar correo</a></p><p>El enlace vence en 24 horas.</p>` });
+}
+
+async function sendPasswordReset(user: { id: string; email: string }) {
+  const token = await issueAccountToken(user, 'RESET_PASSWORD');
+  const url = `${publicAppUrl}/?reset=${encodeURIComponent(token)}`;
+  return sendSystemEmail({ userId: user.id, to: user.email, category: 'PASSWORD_RESET', subject: 'Restablece tu contraseña — Vigente GT', text: `Restablece tu contraseña abriendo este enlace: ${url}`, html: `<h2>Restablecer contraseña</h2><p><a href="${url}">Crear una contraseña nueva</a></p><p>El enlace vence en 30 minutos. Si no lo solicitaste, ignora este mensaje.</p>` });
+}
+
+app.get('/api/health', (_req, res) => res.json({ ok: true, version: process.env.APP_VERSION || 'development' }));
+app.get('/api/ready', async (_req, res) => {
+  try { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true, database: 'ready' }); }
+  catch { res.status(503).json({ ok: false, database: 'unavailable' }); }
+});
+app.get('/api/metrics', async (req, res) => {
+  const expected = process.env.OBSERVABILITY_TOKEN;
+  if (!expected || req.headers.authorization !== `Bearer ${expected}`) return res.status(404).end();
+  res.type(register.contentType).send(await register.metrics());
+});
 
 app.post('/api/auth/register', authLimiter, async (req, res, next) => {
   try {
-    const input = credentialsSchema.parse(req.body);
+    const input = registerSchema.parse(req.body);
     const existing = await prisma.user.findUnique({ where: { email: input.email } });
     if (existing) return res.status(409).json({ error: 'Ese correo ya está registrado.' });
-    const user = await prisma.user.create({ data: { email: input.email, passwordHash: await bcrypt.hash(input.password, 12) } });
-    res.cookie('vigentegt_session', signSession(user), cookieOptions).status(201).json({ user: safeUser(user) });
+    const user = await prisma.user.create({ data: {
+      email: input.email, passwordHash: await bcrypt.hash(input.password, 12),
+      consents: { create: [
+        { type: 'TERMS', version: legalVersion, ipAddress: req.ip },
+        { type: 'PRIVACY', version: legalVersion, ipAddress: req.ip },
+        { type: 'ALERT_EMAILS', version: legalVersion, ipAddress: req.ip },
+      ] },
+    } });
+    const verificationEmailSent = await sendVerification(user);
+    res.cookie('vigentegt_session', signSession(user), cookieOptions).status(201).json({ user: safeUser(user), verificationEmailSent });
   } catch (error) { next(error); }
 });
 
@@ -90,122 +175,144 @@ app.post('/api/auth/login', authLimiter, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post('/api/auth/logout', (_req, res) => res.clearCookie('vigentegt_session', cookieOptions).status(204).end());
+app.post('/api/auth/logout', (_req, res) => res.clearCookie('vigentegt_session', { ...cookieOptions, maxAge: undefined }).status(204).end());
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
   if (!user) return res.status(401).json({ error: 'Usuario no encontrado.' });
   res.json({ user: safeUser(user) });
 });
 
-const serializeDocument = (doc: any) => ({
-  id: doc.id, userId: doc.userId, userEmail: doc.user?.email || '', type: doc.type === 'LICENCIA' ? 'Licencia' : 'DPI',
-  name: doc.name, expiryDate: doc.expiryDate.toISOString().slice(0, 10), createdAt: doc.createdAt.toISOString(),
+app.post('/api/auth/verify-email', emailLimiter, async (req, res) => {
+  const { token } = z.object({ token: z.string().min(20).max(200) }).parse(req.body);
+  const record = await prisma.accountToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: true } });
+  if (!record || record.type !== 'VERIFY_EMAIL' || record.usedAt || record.expiresAt < new Date()) return res.status(400).json({ error: 'El enlace es inválido o ya venció.' });
+  await prisma.$transaction([
+    prisma.accountToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+    prisma.user.update({ where: { id: record.userId }, data: { emailVerifiedAt: new Date() } }),
+  ]);
+  res.json({ message: 'Correo verificado correctamente.' });
 });
+
+app.post('/api/auth/resend-verification', emailLimiter, requireAuth, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+  if (user.emailVerifiedAt) return res.json({ message: 'Tu correo ya está verificado.' });
+  const sent = await sendVerification(user);
+  res.status(sent ? 200 : 503).json(sent ? { message: 'Correo de verificación enviado.' } : { error: 'No se pudo enviar el correo. Intenta más tarde.' });
+});
+
+app.post('/api/auth/forgot-password', emailLimiter, async (req, res) => {
+  const { email } = z.object({ email: emailSchema }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (user) await sendPasswordReset(user);
+  res.json({ message: 'Si la cuenta existe, recibirás un enlace para restablecer la contraseña.' });
+});
+
+app.post('/api/auth/reset-password', emailLimiter, async (req, res) => {
+  const { token, password } = z.object({ token: z.string().min(20).max(200), password: passwordSchema }).parse(req.body);
+  const record = await prisma.accountToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: true } });
+  if (!record || record.type !== 'RESET_PASSWORD' || record.usedAt || record.expiresAt < new Date()) return res.status(400).json({ error: 'El enlace es inválido o ya venció.' });
+  await prisma.$transaction([
+    prisma.accountToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+    prisma.user.update({ where: { id: record.userId }, data: { passwordHash: await bcrypt.hash(password, 12), sessionVersion: { increment: 1 } } }),
+    prisma.accountToken.updateMany({ where: { userId: record.userId, usedAt: null }, data: { usedAt: new Date() } }),
+  ]);
+  await sendSystemEmail({ userId: record.userId, to: record.user.email, category: 'PASSWORD_CHANGED', subject: 'Tu contraseña cambió — Vigente GT', text: 'La contraseña de tu cuenta fue actualizada. Si no reconoces este cambio, contacta al administrador.', html: '<h2>Contraseña actualizada</h2><p>La contraseña de tu cuenta fue actualizada. Si no reconoces este cambio, contacta al administrador.</p>' });
+  res.clearCookie('vigentegt_session', { ...cookieOptions, maxAge: undefined }).json({ message: 'Contraseña actualizada. Inicia sesión nuevamente.' });
+});
+
+app.post('/api/auth/change-password', authLimiter, requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = z.object({ currentPassword: z.string().min(1).max(128), newPassword: passwordSchema }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
+  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) return res.status(400).json({ error: 'La contraseña actual es incorrecta.' });
+  const updated = await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await bcrypt.hash(newPassword, 12), sessionVersion: { increment: 1 } } });
+  res.cookie('vigentegt_session', signSession(updated), cookieOptions).json({ message: 'Contraseña actualizada.' });
+});
+
+const serializeDocument = (doc: any) => ({ id: doc.id, userId: doc.userId, userEmail: doc.user?.email || '', type: doc.type === 'LICENCIA' ? 'Licencia' : 'DPI', name: doc.name, expiryDate: doc.expiryDate.toISOString().slice(0, 10), createdAt: doc.createdAt.toISOString() });
 
 app.get('/api/documents', requireAuth, async (req, res) => {
-  const docs = await prisma.document.findMany({
-    where: req.authUser!.role === 'ADMIN' ? {} : { userId: req.authUser!.id }, include: { user: true }, orderBy: { createdAt: 'desc' },
-  });
+  const docs = await prisma.document.findMany({ where: req.authUser!.role === 'ADMIN' ? {} : { userId: req.authUser!.id }, include: { user: true }, orderBy: { createdAt: 'desc' } });
   res.json({ documents: docs.map(serializeDocument) });
 });
-
-app.post('/api/documents', requireAuth, async (req, res, next) => {
+app.post('/api/documents', requireAuth, requireVerified, async (req, res, next) => {
   try {
     const input = documentSchema.parse(req.body);
     const doc = await prisma.document.create({ data: { userId: req.authUser!.id, type: input.type === 'Licencia' ? 'LICENCIA' : 'DPI', name: input.name, expiryDate: new Date(`${input.expiryDate}T00:00:00.000Z`) }, include: { user: true } });
     res.status(201).json({ document: serializeDocument(doc) });
   } catch (error) { next(error); }
 });
-
 app.delete('/api/documents/:id', requireAuth, async (req, res) => {
   const doc = await prisma.document.findUnique({ where: { id: req.params.id } });
   if (!doc) return res.status(404).json({ error: 'Documento no encontrado.' });
   if (req.authUser!.role !== 'ADMIN' && doc.userId !== req.authUser!.id) return res.status(403).json({ error: 'No puedes eliminar este documento.' });
-  await prisma.document.delete({ where: { id: doc.id } });
-  res.status(204).end();
+  await prisma.document.delete({ where: { id: doc.id } }); res.status(204).end();
 });
 
 app.get('/api/admin/overview', requireAuth, requireAdmin, async (_req, res) => {
-  const [users, documents, logs] = await Promise.all([
-    prisma.user.findMany({ orderBy: { createdAt: 'desc' } }),
-    prisma.document.findMany({ include: { user: true }, orderBy: { createdAt: 'desc' } }),
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [users, documents, logs, deliveryStats] = await Promise.all([
+    prisma.user.findMany({ orderBy: { createdAt: 'desc' } }), prisma.document.findMany({ include: { user: true }, orderBy: { createdAt: 'desc' } }),
     prisma.notificationLog.findMany({ include: { document: true }, orderBy: { sentAt: 'desc' }, take: 500 }),
+    prisma.emailDelivery.groupBy({ by: ['deliveryStatus'], where: { createdAt: { gte: since } }, _count: true }),
   ]);
-  res.json({ users: users.map(safeUser), documents: documents.map(serializeDocument), notificationLogs: logs.map(log => ({ id: log.id, userEmail: log.recipientEmail, docType: log.document.type === 'LICENCIA' ? 'Licencia' : 'DPI', docName: log.document.name, expiryDate: log.document.expiryDate.toISOString().slice(0, 10), sentAt: log.sentAt.toISOString(), status: log.statusLabel, deliveryStatus: log.deliveryStatus })) });
+  res.json({ users: users.map(safeUser), documents: documents.map(serializeDocument), deliveryStats, notificationLogs: logs.map(log => ({ id: log.id, userEmail: log.recipientEmail, docType: log.document.type === 'LICENCIA' ? 'Licencia' : 'DPI', docName: log.document.name, expiryDate: log.document.expiryDate.toISOString().slice(0, 10), sentAt: log.sentAt.toISOString(), status: log.statusLabel, deliveryStatus: log.deliveryStatus })) });
 });
-
+app.get('/api/admin/smtp-health', requireAuth, requireAdmin, async (_req, res) => {
+  const transport = mailTransport();
+  if (!transport) return res.status(503).json({ ok: false, error: 'SMTP no está configurado.' });
+  try { await transport.verify(); res.json({ ok: true }); } catch (error) { res.status(503).json({ ok: false, error: error instanceof Error ? error.message : 'SMTP no disponible.' }); }
+});
 app.delete('/api/admin/users/:id', requireAuth, requireAdmin, async (req, res) => {
   if (req.params.id === req.authUser!.id) return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta administrativa.' });
   const user = await prisma.user.findUnique({ where: { id: req.params.id } });
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
   if (user.role === 'ADMIN') return res.status(403).json({ error: 'No se puede eliminar otro administrador desde este panel.' });
-  await prisma.user.delete({ where: { id: user.id } });
-  res.status(204).end();
+  await prisma.user.delete({ where: { id: user.id } }); res.status(204).end();
 });
 
-function mailTransport() {
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD } = process.env;
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASSWORD) return null;
-  return nodemailer.createTransport({ host: SMTP_HOST, port: Number(SMTP_PORT), secure: process.env.SMTP_SECURE === 'true', auth: { user: SMTP_USER, pass: SMTP_PASSWORD } });
-}
-
-async function sendReminder(documentId: string, reminderKey?: string) {
+export async function sendReminder(documentId: string, reminderKey?: string) {
   const doc = await prisma.document.findUnique({ where: { id: documentId }, include: { user: true } });
   if (!doc) throw new Error('Documento no encontrado.');
+  if (!doc.user.emailVerifiedAt) throw new Error('El correo del usuario no está verificado.');
   const days = Math.ceil((doc.expiryDate.getTime() - Date.now()) / 86400000);
   const label = days < 0 ? 'Vencido' : days <= 30 ? 'Urgente' : 'Vence pronto';
-  const transport = mailTransport();
-  let deliveryStatus: 'SENT' | 'FAILED' = 'FAILED';
-  let errorMessage: string | undefined;
-  try {
-    if (!transport) throw new Error('SMTP no está configurado.');
-    await transport.sendMail({
-      from: process.env.MAIL_FROM || process.env.SMTP_USER,
-      to: doc.user.email,
-      subject: `${label}: ${doc.name} — Vigente GT`,
-      text: `Tu ${doc.type === 'LICENCIA' ? 'Licencia' : 'DPI'} “${doc.name}” vence el ${doc.expiryDate.toISOString().slice(0, 10)}. Ingresa a Vigente GT para revisar el estado.`,
-    });
-    deliveryStatus = 'SENT';
-  } catch (error) { errorMessage = error instanceof Error ? error.message : 'Error de correo'; }
-  const log = await prisma.notificationLog.create({ data: { documentId: doc.id, recipientEmail: doc.user.email, statusLabel: label, deliveryStatus, reminderKey, errorMessage } });
-  return { log, delivered: deliveryStatus === 'SENT' };
+  const delivered = await sendSystemEmail({ userId: doc.userId, to: doc.user.email, category: 'REMINDER', subject: `${label}: ${doc.name} — Vigente GT`, text: `Tu ${doc.type === 'LICENCIA' ? 'Licencia' : 'DPI'} “${doc.name}” vence el ${doc.expiryDate.toISOString().slice(0, 10)}.`, html: `<h2>${label}</h2><p>Tu ${doc.type === 'LICENCIA' ? 'Licencia' : 'DPI'} “${doc.name}” vence el ${doc.expiryDate.toISOString().slice(0, 10)}.</p>` });
+  const log = await prisma.notificationLog.create({ data: { documentId: doc.id, recipientEmail: doc.user.email, statusLabel: label, deliveryStatus: delivered ? 'SENT' : 'FAILED', reminderKey, errorMessage: delivered ? undefined : 'Consulta EmailDelivery para detalles.' } });
+  return { log, delivered };
 }
 
 app.post('/api/admin/documents/:id/notify', requireAuth, requireAdmin, async (req, res, next) => {
-  try {
-    const result = await sendReminder(req.params.id);
-    res.status(result.delivered ? 200 : 503).json({ delivered: result.delivered, error: result.delivered ? undefined : 'No se pudo entregar el correo. Revisa la configuración SMTP.' });
-  } catch (error) { next(error); }
+  try { const result = await sendReminder(req.params.id); res.status(result.delivered ? 200 : 503).json(result.delivered ? { delivered: true } : { delivered: false, error: 'No se pudo entregar el correo.' }); }
+  catch (error) { next(error); }
 });
 
-async function seedAdmin() {
-  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD;
+export async function seedAdmin() {
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase(); const password = process.env.ADMIN_PASSWORD;
   if (!email || !password) throw new Error('ADMIN_EMAIL y ADMIN_PASSWORD son obligatorios.');
   if (password.length < 12) throw new Error('ADMIN_PASSWORD debe contener al menos 12 caracteres.');
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (!existing) await prisma.user.create({ data: { email, passwordHash: await bcrypt.hash(password, 12), role: 'ADMIN' } });
-  else if (existing.role !== 'ADMIN') await prisma.user.update({ where: { id: existing.id }, data: { role: 'ADMIN' } });
+  if (!existing) await prisma.user.create({ data: { email, passwordHash: await bcrypt.hash(password, 12), role: 'ADMIN', emailVerifiedAt: new Date() } });
+  else await prisma.user.update({ where: { id: existing.id }, data: { role: 'ADMIN', emailVerifiedAt: existing.emailVerifiedAt || new Date() } });
 }
 
 cron.schedule('15 8 * * *', async () => {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const today = new Date(); today.setUTCHours(0, 0, 0, 0);
   for (const threshold of [90, 60, 30, 0]) {
     const target = new Date(today.getTime() + threshold * 86400000);
-    const docs = await prisma.document.findMany({ where: { expiryDate: target } });
+    const docs = await prisma.document.findMany({ where: { expiryDate: target, user: { emailVerifiedAt: { not: null } } } });
     for (const doc of docs) {
       const key = `${doc.id}:${target.toISOString().slice(0, 10)}:${threshold}`;
-      if (!(await prisma.notificationLog.findUnique({ where: { reminderKey: key } }))) await sendReminder(doc.id, key);
+      if (!(await prisma.notificationLog.findUnique({ where: { reminderKey: key } }))) await sendReminder(doc.id, key).catch(error => logger.error({ err: error }, 'scheduled reminder failed'));
     }
   }
+  await prisma.accountToken.deleteMany({ where: { expiresAt: { lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } } });
 }, { timezone: process.env.TZ || 'America/Guatemala' });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof z.ZodError) return res.status(400).json({ error: error.issues[0]?.message || 'Datos inválidos.' });
-  console.error(error);
-  res.status(500).json({ error: 'Ocurrió un error interno.' });
+  req.log.error({ err: error }, 'request failed'); res.status(500).json({ error: 'Ocurrió un error interno.', requestId: req.id });
 });
 
 if (isProduction) {
@@ -214,7 +321,8 @@ if (isProduction) {
   app.get('*', (_req, res) => res.sendFile(path.join(root, 'dist', 'index.html')));
 }
 
-await seedAdmin();
-app.listen(port, '0.0.0.0', () => console.log(`Vigente GT disponible en el puerto ${port}`));
-
-process.on('SIGTERM', async () => { await prisma.$disconnect(); process.exit(0); });
+if (process.env.NODE_ENV !== 'test') {
+  await seedAdmin();
+  const server = app.listen(port, '0.0.0.0', () => logger.info({ port }, 'Vigente GT started'));
+  process.on('SIGTERM', () => server.close(async () => { await prisma.$disconnect(); process.exit(0); }));
+}

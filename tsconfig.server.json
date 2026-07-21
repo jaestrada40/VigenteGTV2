@@ -8,5 +8,5 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "include": ["server/**/*.ts"]
+  "include": ["server/index.ts", "server/verify-backup.ts"]
 }
