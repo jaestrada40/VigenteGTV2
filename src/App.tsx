@@ -42,6 +42,7 @@ export default function App() {
     api.me()
       .then(async ({ user }) => {
         setCurrentUser(user);
+        if (user.mfaRequiredSetup) { setView('security'); return; }
         await loadData(user);
         setView(user.isAdmin ? 'admin' : 'dashboard');
       })
@@ -51,6 +52,7 @@ export default function App() {
 
   const handleAuthenticated = async (user: User) => {
     setCurrentUser(user);
+    if (user.mfaRequiredSetup) { setView('security'); return; }
     await loadData(user);
     setView(user.isAdmin ? 'admin' : 'dashboard');
   };
@@ -117,7 +119,7 @@ export default function App() {
         {safeView === 'login' && <LoginPage setView={setView} onLoginSuccess={handleAuthenticated} />}
         {safeView === 'dashboard' && currentUser && <DashboardPage currentUser={currentUser} documents={documents} onAddDocument={handleAddDocument} onDeleteDocument={handleDeleteDocument} setView={setView} />}
         {safeView === 'admin' && currentUser?.isAdmin && <AdminPanel users={users} documents={documents} notificationLogs={notificationLogs} onDeleteUser={handleDeleteUser} onDeleteDocument={handleDeleteDocument} onResendNotification={handleResendNotification} setView={setView} />}
-        {safeView === 'security' && currentUser && <SecurityPage setView={setView} isAdmin={currentUser.isAdmin} onAccountDeleted={handleAccountDeleted} />}
+        {safeView === 'security' && currentUser && <SecurityPage setView={setView} isAdmin={currentUser.isAdmin} mfaEnabled={currentUser.mfaEnabled} onAccountDeleted={handleAccountDeleted} />}
         {safeView === 'privacy' && <LegalPage type="privacy" setView={setView} />}
         {safeView === 'terms' && <LegalPage type="terms" setView={setView} />}
         </>}

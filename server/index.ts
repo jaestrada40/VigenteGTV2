@@ -15,6 +15,8 @@ import pino from 'pino';
 import { collectDefaultMetrics, Counter, Histogram, register } from 'prom-client';
 import { PrismaClient, Role, EmailCategory } from '@prisma/client';
 import { z } from 'zod';
+import { generateSecret, generateURI, verify as verifyTotp } from 'otplib';
+import QRCode from 'qrcode';
 
 export const prisma = new PrismaClient();
 export const app = express();
@@ -26,10 +28,13 @@ const legalVersion = process.env.LEGAL_VERSION || '2026-07-21';
 const logger = pino({ level: process.env.LOG_LEVEL || 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'password', 'token'] });
 
 if (jwtSecret.length < 32) throw new Error('JWT_SECRET debe existir y contener al menos 32 caracteres.');
+const configuredMfaKey = process.env.MFA_ENCRYPTION_KEY ? Buffer.from(process.env.MFA_ENCRYPTION_KEY, 'base64') : null;
+if (isProduction && (!configuredMfaKey || configuredMfaKey.length !== 32)) throw new Error('MFA_ENCRYPTION_KEY debe contener exactamente 32 bytes codificados en Base64.');
+const mfaEncryptionKey = configuredMfaKey?.length === 32 ? configuredMfaKey : crypto.createHash('sha256').update(jwtSecret).digest();
 
 declare global {
   namespace Express {
-    interface Request { authUser?: { id: string; role: Role; emailVerifiedAt: Date | null; sessionVersion: number } }
+    interface Request { authUser?: { id: string; role: Role; emailVerifiedAt: Date | null; sessionVersion: number; mfaEnabledAt: Date | null } }
   }
 }
 
@@ -61,8 +66,8 @@ const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHea
 const emailLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false });
 const cookieOptions = { httpOnly: true, secure: isProduction, sameSite: 'lax' as const, maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' };
 
-type SafeUserInput = { id: string; email: string; role: Role; createdAt: Date; emailVerifiedAt: Date | null };
-const safeUser = (user: SafeUserInput) => ({ id: user.id, email: user.email, isAdmin: user.role === 'ADMIN', emailVerified: Boolean(user.emailVerifiedAt), createdAt: user.createdAt.toISOString() });
+type SafeUserInput = { id: string; email: string; role: Role; createdAt: Date; emailVerifiedAt: Date | null; mfaEnabledAt: Date | null };
+const safeUser = (user: SafeUserInput) => ({ id: user.id, email: user.email, isAdmin: user.role === 'ADMIN', emailVerified: Boolean(user.emailVerifiedAt), mfaEnabled: Boolean(user.mfaEnabledAt), mfaRequiredSetup: user.role === 'ADMIN' && !user.mfaEnabledAt, createdAt: user.createdAt.toISOString() });
 const passwordSchema = z.string().min(12, 'La contraseña debe tener al menos 12 caracteres.').max(128).refine(value => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value), 'Incluye mayúscula, minúscula y número.');
 const emailSchema = z.string().email().max(254).transform(value => value.trim().toLowerCase());
 const credentialsSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128) });
@@ -76,7 +81,7 @@ function signSession(user: { id: string; role: Role; sessionVersion: number }) {
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const payload = jwt.verify(req.cookies.vigentegt_session || '', jwtSecret, { issuer: 'vigentegt', audience: 'vigentegt-web' }) as jwt.JwtPayload;
-    const user = await prisma.user.findUnique({ where: { id: String(payload.sub) }, select: { id: true, role: true, emailVerifiedAt: true, sessionVersion: true } });
+    const user = await prisma.user.findUnique({ where: { id: String(payload.sub) }, select: { id: true, role: true, emailVerifiedAt: true, sessionVersion: true, mfaEnabledAt: true } });
     if (!user || user.sessionVersion !== payload.sv) throw new Error('invalid session');
     req.authUser = user;
     next();
@@ -85,7 +90,38 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (req.authUser?.role !== 'ADMIN') return res.status(403).json({ error: 'Acceso reservado para administradores.' });
+  if (!req.authUser.mfaEnabledAt) return res.status(403).json({ error: 'Configura MFA antes de acceder al panel administrativo.', code: 'MFA_SETUP_REQUIRED' });
   next();
+}
+
+function encryptMfaSecret(secret: string) {
+  const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv('aes-256-gcm', mfaEncryptionKey, iv);
+  const encrypted = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
+  return `${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${encrypted.toString('base64url')}`;
+}
+
+function decryptMfaSecret(value: string) {
+  const [iv, tag, encrypted] = value.split('.');
+  if (!iv || !tag || !encrypted) throw new Error('Secreto MFA inválido.');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', mfaEncryptionKey, Buffer.from(iv, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+  return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64url')), decipher.final()]).toString('utf8');
+}
+
+function normalizeRecoveryCode(code: string) { return code.trim().toUpperCase().replace(/[^A-F0-9]/g, ''); }
+function recoveryCodeHash(code: string) { return crypto.createHash('sha256').update(normalizeRecoveryCode(code)).digest('hex'); }
+function createRecoveryCodes() { return Array.from({ length: 10 }, () => crypto.randomBytes(8).toString('hex').toUpperCase().match(/.{1,4}/g)!.join('-')); }
+
+async function verifyMfaCredential(user: { id: string; mfaSecretEncrypted: string | null }, code: string, consumeRecovery = true) {
+  if (!user.mfaSecretEncrypted) return false;
+  if (/^\d{6}$/.test(code.trim())) {
+    const result = await verifyTotp({ secret: decryptMfaSecret(user.mfaSecretEncrypted), token: code.trim(), epochTolerance: 30 });
+    return result.valid;
+  }
+  const recovery = await prisma.mfaRecoveryCode.findUnique({ where: { codeHash: recoveryCodeHash(code) } });
+  if (!recovery || recovery.userId !== user.id || recovery.usedAt) return false;
+  if (consumeRecovery) await prisma.mfaRecoveryCode.update({ where: { id: recovery.id }, data: { usedAt: new Date() } });
+  return true;
 }
 
 function requireVerified(req: Request, res: Response, next: NextFunction) {
@@ -171,8 +207,23 @@ app.post('/api/auth/login', authLimiter, async (req, res, next) => {
     const input = credentialsSchema.parse(req.body);
     const user = await prisma.user.findUnique({ where: { email: input.email } });
     if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) return res.status(401).json({ error: 'Correo o contraseña incorrectos.' });
+    if (user.mfaEnabledAt) {
+      const mfaTicket = jwt.sign({ sub: user.id, purpose: 'mfa-login', sv: user.sessionVersion }, jwtSecret, { expiresIn: '5m', issuer: 'vigentegt', audience: 'vigentegt-mfa' });
+      return res.json({ mfaRequired: true, mfaTicket });
+    }
     res.cookie('vigentegt_session', signSession(user), cookieOptions).json({ user: safeUser(user) });
   } catch (error) { next(error); }
+});
+
+app.post('/api/auth/mfa', authLimiter, async (req, res) => {
+  const { ticket, code } = z.object({ ticket: z.string().min(20).max(2000), code: z.string().min(6).max(40) }).parse(req.body);
+  try {
+    const payload = jwt.verify(ticket, jwtSecret, { issuer: 'vigentegt', audience: 'vigentegt-mfa' }) as jwt.JwtPayload;
+    if (payload.purpose !== 'mfa-login') throw new Error('invalid purpose');
+    const user = await prisma.user.findUnique({ where: { id: String(payload.sub) } });
+    if (!user || !user.mfaEnabledAt || user.sessionVersion !== payload.sv || !(await verifyMfaCredential(user, code))) return res.status(401).json({ error: 'Código de autenticación inválido.' });
+    res.cookie('vigentegt_session', signSession(user), cookieOptions).json({ user: safeUser(user) });
+  } catch { res.status(401).json({ error: 'El segundo paso expiró o no es válido. Inicia sesión nuevamente.' }); }
 });
 
 app.post('/api/auth/logout', (_req, res) => res.clearCookie('vigentegt_session', { ...cookieOptions, maxAge: undefined }).status(204).end());
@@ -227,6 +278,42 @@ app.post('/api/auth/change-password', authLimiter, requireAuth, async (req, res)
   if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) return res.status(400).json({ error: 'La contraseña actual es incorrecta.' });
   const updated = await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await bcrypt.hash(newPassword, 12), sessionVersion: { increment: 1 } } });
   res.cookie('vigentegt_session', signSession(updated), cookieOptions).json({ message: 'Contraseña actualizada.' });
+});
+
+app.post('/api/mfa/setup', authLimiter, requireAuth, async (req, res) => {
+  const { password } = z.object({ password: z.string().min(1).max(128) }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
+  if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(400).json({ error: 'La contraseña es incorrecta.' });
+  if (user.mfaEnabledAt) return res.status(409).json({ error: 'MFA ya está activado.' });
+  const secret = generateSecret();
+  await prisma.user.update({ where: { id: user.id }, data: { mfaSecretEncrypted: encryptMfaSecret(secret) } });
+  const uri = generateURI({ issuer: 'Vigente GT', label: user.email, secret });
+  res.json({ qrCode: await QRCode.toDataURL(uri, { width: 256, margin: 1 }), manualKey: secret });
+});
+
+app.post('/api/mfa/enable', authLimiter, requireAuth, async (req, res) => {
+  const { code } = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
+  if (!user?.mfaSecretEncrypted || user.mfaEnabledAt) return res.status(400).json({ error: 'Inicia nuevamente la configuración de MFA.' });
+  if (!(await verifyMfaCredential(user, code, false))) return res.status(400).json({ error: 'El código no es válido. Revisa la hora de tu dispositivo.' });
+  const recoveryCodes = createRecoveryCodes();
+  await prisma.$transaction([
+    prisma.mfaRecoveryCode.deleteMany({ where: { userId: user.id } }),
+    prisma.mfaRecoveryCode.createMany({ data: recoveryCodes.map(recoveryCode => ({ userId: user.id, codeHash: recoveryCodeHash(recoveryCode) })) }),
+    prisma.user.update({ where: { id: user.id }, data: { mfaEnabledAt: new Date(), sessionVersion: { increment: 1 } } }),
+  ]);
+  const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+  res.cookie('vigentegt_session', signSession(updated), cookieOptions).json({ recoveryCodes });
+});
+
+app.post('/api/mfa/disable', authLimiter, requireAuth, async (req, res) => {
+  const { password, code } = z.object({ password: z.string().min(1).max(128), code: z.string().min(6).max(40) }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.authUser!.id } });
+  if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(400).json({ error: 'La contraseña es incorrecta.' });
+  if (user.role === 'ADMIN') return res.status(403).json({ error: 'MFA es obligatorio para administradores y no puede desactivarse.' });
+  if (!user.mfaEnabledAt || !(await verifyMfaCredential(user, code))) return res.status(400).json({ error: 'El código MFA es incorrecto.' });
+  const updated = await prisma.user.update({ where: { id: user.id }, data: { mfaEnabledAt: null, mfaSecretEncrypted: null, sessionVersion: { increment: 1 }, recoveryCodes: { deleteMany: {} } } });
+  res.cookie('vigentegt_session', signSession(updated), cookieOptions).json({ message: 'MFA desactivado.' });
 });
 
 app.get('/api/account/export', requireAuth, async (req, res) => {

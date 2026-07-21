@@ -6,6 +6,8 @@ export interface User {
   createdAt: string;
   isAdmin: boolean;
   emailVerified: boolean;
+  mfaEnabled: boolean;
+  mfaRequiredSetup: boolean;
 }
 
 export interface Document {

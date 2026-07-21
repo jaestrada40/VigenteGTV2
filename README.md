@@ -16,6 +16,7 @@ Vigente GT permite crear una cuenta, registrar fechas de vencimiento y recibir r
 - Historial que diferencia entregas exitosas y fallidas.
 - Verificación de correo obligatoria antes de activar alertas.
 - Recuperación y cambio de contraseña con tokens de un solo uso.
+- MFA TOTP obligatorio para administradores y opcional para usuarios, con códigos de recuperación.
 - Consentimiento versionado, política de privacidad y términos de servicio.
 - Métricas Prometheus protegidas, logs JSON y pruebas automatizadas.
 - Procedimiento para comprobar restauraciones de respaldos.
@@ -58,6 +59,7 @@ La interfaz estará en [http://localhost:3000](http://localhost:3000). Vite envi
 | --- | --- | --- |
 | `DATABASE_URL` | Sí | Conexión privada a PostgreSQL |
 | `JWT_SECRET` | Sí | Firma de sesiones; mínimo 32 caracteres aleatorios |
+| `MFA_ENCRYPTION_KEY` | Sí | Cifra secretos TOTP; exactamente 32 bytes en Base64 |
 | `PUBLIC_APP_URL` | Sí | Dominio HTTPS usado en enlaces de verificación y recuperación |
 | `OBSERVABILITY_TOKEN` | Sí | Protege el endpoint privado `/api/metrics` |
 | `LEGAL_VERSION` | Recomendado | Versión registrada junto a cada consentimiento |
@@ -91,6 +93,14 @@ Para generar secretos seguros:
 ```bash
 openssl rand -base64 48
 ```
+
+Genera la clave independiente de MFA con:
+
+```bash
+openssl rand -base64 32
+```
+
+No cambies `MFA_ENCRYPTION_KEY` después de que existan usuarios con MFA sin ejecutar un proceso de rotación: perderían acceso a sus códigos TOTP y necesitarían recuperación administrativa.
 
 Después del primer acceso cambia la contraseña desde **Seguridad**. El cambio invalida todas las sesiones anteriores de la cuenta.
 

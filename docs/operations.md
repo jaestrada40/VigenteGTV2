@@ -22,6 +22,7 @@ Configura alertas por disponibilidad, errores HTTP 5xx, latencia, entregas `FAIL
 ## Respuesta a incidentes
 
 - Rota `JWT_SECRET` para cerrar todas las sesiones de forma inmediata.
+- Conserva `MFA_ENCRYPTION_KEY` en el almacén privado de Coolify y en una copia segura separada. Rotarla sin migrar los secretos obliga a reinscribir MFA.
 - Cambiar una contraseña incrementa `sessionVersion` y revoca sesiones anteriores de esa cuenta.
 - Rota credenciales de PostgreSQL y SMTP desde Coolify; nunca las agregues a Git.
 - Conserva logs fuera del contenedor con acceso restringido y una política explícita de retención.
@@ -31,4 +32,5 @@ Configura alertas por disponibilidad, errores HTTP 5xx, latencia, entregas `FAIL
 - Revisión jurídica de privacidad y términos.
 - SPF, DKIM y DMARC para el dominio remitente.
 - HTTPS obligatorio y dominio correcto en `PUBLIC_APP_URL`.
+- MFA configurado y códigos de recuperación guardados para cada administrador.
 - Prueba documentada de recuperación de cuenta, entrega SMTP y restauración de backup.

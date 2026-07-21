@@ -9,7 +9,8 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => request<{ user: User }>('/api/auth/me'),
-  login: (email: string, password: string) => request<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  login: (email: string, password: string) => request<{ user?: User; mfaRequired?: boolean; mfaTicket?: string }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  completeMfa: (ticket: string, code: string) => request<{ user: User }>('/api/auth/mfa', { method: 'POST', body: JSON.stringify({ ticket, code }) }),
   register: (email: string, password: string) => request<{ user: User; verificationEmailSent: boolean }>('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password, acceptedTerms: true, acceptedPrivacy: true, alertConsent: true }) }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   documents: () => request<{ documents: Document[] }>('/api/documents'),
@@ -26,4 +27,7 @@ export const api = {
   smtpHealth: () => request<{ ok: boolean }>('/api/admin/smtp-health'),
   exportAccount: () => request<Record<string, unknown>>('/api/account/export'),
   deleteAccount: (password: string, confirmation: string) => request<void>('/api/account', { method: 'DELETE', body: JSON.stringify({ password, confirmation }) }),
+  setupMfa: (password: string) => request<{ qrCode: string; manualKey: string }>('/api/mfa/setup', { method: 'POST', body: JSON.stringify({ password }) }),
+  enableMfa: (code: string) => request<{ recoveryCodes: string[] }>('/api/mfa/enable', { method: 'POST', body: JSON.stringify({ code }) }),
+  disableMfa: (password: string, code: string) => request<{ message: string }>('/api/mfa/disable', { method: 'POST', body: JSON.stringify({ password, code }) }),
 };

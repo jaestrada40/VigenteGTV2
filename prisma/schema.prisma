@@ -48,10 +48,24 @@ model User {
   createdAt    DateTime   @default(now())
   emailVerifiedAt DateTime?
   sessionVersion  Int        @default(0)
+  mfaSecretEncrypted String?
+  mfaEnabledAt       DateTime?
   documents    Document[]
   accountTokens AccountToken[]
   consents      ConsentRecord[]
   emailDeliveries EmailDelivery[]
+  recoveryCodes  MfaRecoveryCode[]
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, usedAt])
 }
 
 model AccountToken {
