@@ -449,10 +449,10 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
               </span>
               <h4 className="text-xs font-bold text-slate-800">Requisitos básicos para renovación:</h4>
               <ul className="text-xs text-slate-500 list-disc list-inside space-y-1 pl-1 font-sans">
-                <li>Pago de <strong>Q100.00</strong> en bancos autorizados (Banrural, etc.).</li>
-                <li>Certificado de Nacimiento vigente (si hay cambios de estado civil).</li>
-                <li>Boleto de Ornato del año en curso.</li>
-                <li>DPI vencido o constancia de robo/pérdida.</li>
+                <li>Pago de <strong>Q100.00</strong> en un banco autorizado.</li>
+                <li>Presentar el recibo de pago en una oficina de RENAP.</li>
+                <li>El trámite es personal por actualización de fotografía y biometría.</li>
+                <li>Conservar la constancia para consultar y recoger el documento.</li>
               </ul>
               <a 
                 href="https://www.renap.gob.gt" 
@@ -473,20 +473,24 @@ export default function DashboardPage({ currentUser, documents, onAddDocument, o
               </span>
               <h4 className="text-xs font-bold text-slate-800">Requisitos básicos para renovación:</h4>
               <ul className="text-xs text-slate-500 list-disc list-inside space-y-1 pl-1 font-sans">
-                <li>Examen de la vista emitido por clínica aprobada (Q50.00 apróx).</li>
+                <li>Examen de la vista emitido por clínica óptica u oftalmólogo colegiado activo.</li>
                 <li>DPI vigente original y copia en buen estado.</li>
-                <li>Estar solvente de multas de tránsito (SAT y PMTs).</li>
-                <li>Pago por años: 1 año Q100, 2 años Q185, 3 años Q260, 4 años Q320.</li>
+                <li>Licencia original y solvencia de multas de tránsito.</li>
+                <li>Pago en Banrural: 1 año Q100, 2 Q185, 3 Q260, 4 Q320 o 5 Q390.</li>
               </ul>
               <a 
-                href="https://licencias.com.gt" 
+                href="https://www.maycom.com.gt/requisitos" 
                 target="_blank" 
                 rel="noopener noreferrer" 
                 className="text-[11px] font-mono font-bold text-brand-teal hover:underline block uppercase tracking-wider"
               >
-                Solicitar cita en Maycom &rarr;
+                Confirmar requisitos en Maycom &rarr;
               </a>
             </div>
+
+            <p className="border-t border-slate-200/60 pt-3 text-[10px] leading-relaxed text-slate-400">
+              Información verificada en fuentes oficiales en julio de 2026. Confirma posibles cambios antes de acudir.
+            </p>
 
           </div>
 
