@@ -135,6 +135,18 @@ function mailTransport() {
   return nodemailer.createTransport({ host: SMTP_HOST, port: Number(SMTP_PORT), secure: process.env.SMTP_SECURE === 'true', auth: { user: SMTP_USER, pass: SMTP_PASSWORD }, connectionTimeout: 10_000, socketTimeout: 15_000 });
 }
 
+function escapeHtml(value: string) {
+  return value.replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]!);
+}
+
+function emailTemplate(input: { eyebrow: string; title: string; intro: string; content?: string; actionLabel?: string; actionUrl?: string; accent?: string }) {
+  const accent = input.accent || '#2eaa8b';
+  const action = input.actionLabel && input.actionUrl
+    ? `<tr><td style="padding:8px 40px 30px"><a href="${escapeHtml(input.actionUrl)}" style="display:inline-block;background:${accent};color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;font-size:14px;font-weight:700;line-height:20px;padding:13px 22px;border-radius:6px">${escapeHtml(input.actionLabel)}</a></td></tr>`
+    : '';
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.title)}</title></head><body style="margin:0;background:#f4f7fb;color:#143a66"><div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(input.intro)}</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7fb"><tr><td align="center" style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #dfe7f1;border-radius:12px;overflow:hidden"><tr><td style="height:6px;background:${accent}"></td></tr><tr><td style="padding:30px 40px 20px"><table role="presentation" cellspacing="0" cellpadding="0"><tr><td style="width:44px;height:44px;background:#123c68;border-radius:10px;text-align:center;color:#39b99a;font:bold 15px Arial,sans-serif">VG</td><td style="padding-left:13px"><div style="font:bold 20px Arial,sans-serif;color:#123c68">Vigente <span style="color:#2eaa8b">GT</span></div><div style="margin-top:3px;font:10px Arial,sans-serif;letter-spacing:1.5px;color:#7f94ad">CONTROL CIUDADANO</div></td></tr></table></td></tr><tr><td style="padding:4px 40px 10px"><div style="font:bold 11px Arial,sans-serif;letter-spacing:1.3px;color:${accent};text-transform:uppercase">${escapeHtml(input.eyebrow)}</div><h1 style="margin:12px 0 14px;font:700 28px/35px Arial,sans-serif;color:#123c68">${escapeHtml(input.title)}</h1><p style="margin:0;font:16px/25px Arial,sans-serif;color:#4e6682">${escapeHtml(input.intro)}</p></td></tr>${input.content ? `<tr><td style="padding:18px 40px 22px">${input.content}</td></tr>` : ''}${action}<tr><td style="padding:22px 40px;background:#f8fafc;border-top:1px solid #e6edf5"><p style="margin:0 0 7px;font:12px/18px Arial,sans-serif;color:#71849a">Este es un mensaje automático de Vigente GT. Nunca te pediremos contraseñas ni códigos de autenticación por correo.</p><p style="margin:0;font:11px/17px Arial,sans-serif;color:#91a0b2">Servicio independiente de control ciudadano · Guatemala<br><a href="${escapeHtml(publicAppUrl)}" style="color:#2e8f79;text-decoration:none">${escapeHtml(publicAppUrl.replace(/^https?:\/\//, ''))}</a></p></td></tr></table></td></tr></table></body></html>`;
+}
+
 async function sendSystemEmail(input: { userId?: string; to: string; category: EmailCategory; subject: string; text: string; html: string }) {
   const transport = mailTransport();
   let deliveryStatus: 'SENT' | 'FAILED' = 'FAILED';
@@ -164,13 +176,13 @@ async function issueAccountToken(user: { id: string; email: string }, type: 'VER
 async function sendVerification(user: { id: string; email: string }) {
   const token = await issueAccountToken(user, 'VERIFY_EMAIL');
   const url = `${publicAppUrl}/?verify=${encodeURIComponent(token)}`;
-  return sendSystemEmail({ userId: user.id, to: user.email, category: 'VERIFICATION', subject: 'Verifica tu correo — Vigente GT', text: `Verifica tu correo abriendo este enlace: ${url}`, html: `<h2>Confirma tu correo</h2><p>Activa tus alertas de Vigente GT:</p><p><a href="${url}">Verificar correo</a></p><p>El enlace vence en 24 horas.</p>` });
+  return sendSystemEmail({ userId: user.id, to: user.email, category: 'VERIFICATION', subject: 'Verifica tu correo — Vigente GT', text: `Verifica tu correo abriendo este enlace: ${url}\n\nEl enlace vence en 24 horas.`, html: emailTemplate({ eyebrow: 'Verificación de cuenta', title: 'Confirma tu correo electrónico', intro: 'Verifica que esta dirección te pertenece para activar tus recordatorios de documentos.', content: '<div style="padding:14px 16px;background:#eef9f6;border-left:4px solid #2eaa8b;border-radius:4px;font:14px/21px Arial,sans-serif;color:#355a55">Este enlace estará disponible durante 24 horas.</div>', actionLabel: 'Verificar mi correo', actionUrl: url }) });
 }
 
 async function sendPasswordReset(user: { id: string; email: string }) {
   const token = await issueAccountToken(user, 'RESET_PASSWORD');
   const url = `${publicAppUrl}/?reset=${encodeURIComponent(token)}`;
-  return sendSystemEmail({ userId: user.id, to: user.email, category: 'PASSWORD_RESET', subject: 'Restablece tu contraseña — Vigente GT', text: `Restablece tu contraseña abriendo este enlace: ${url}`, html: `<h2>Restablecer contraseña</h2><p><a href="${url}">Crear una contraseña nueva</a></p><p>El enlace vence en 30 minutos. Si no lo solicitaste, ignora este mensaje.</p>` });
+  return sendSystemEmail({ userId: user.id, to: user.email, category: 'PASSWORD_RESET', subject: 'Restablece tu contraseña — Vigente GT', text: `Restablece tu contraseña abriendo este enlace: ${url}\n\nEl enlace vence en 30 minutos. Si no lo solicitaste, ignora este mensaje.`, html: emailTemplate({ eyebrow: 'Seguridad de la cuenta', title: 'Crea una contraseña nueva', intro: 'Recibimos una solicitud para restablecer la contraseña de tu cuenta.', content: '<div style="padding:14px 16px;background:#fff8e8;border-left:4px solid #d99a24;border-radius:4px;font:14px/21px Arial,sans-serif;color:#66532e">El enlace vence en 30 minutos. Si no hiciste esta solicitud, puedes ignorar el correo.</div>', actionLabel: 'Restablecer contraseña', actionUrl: url, accent: '#d99a24' }) });
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, version: process.env.APP_VERSION || 'development' }));
@@ -268,7 +280,7 @@ app.post('/api/auth/reset-password', emailLimiter, async (req, res) => {
     prisma.user.update({ where: { id: record.userId }, data: { passwordHash: await bcrypt.hash(password, 12), sessionVersion: { increment: 1 } } }),
     prisma.accountToken.updateMany({ where: { userId: record.userId, usedAt: null }, data: { usedAt: new Date() } }),
   ]);
-  await sendSystemEmail({ userId: record.userId, to: record.user.email, category: 'PASSWORD_CHANGED', subject: 'Tu contraseña cambió — Vigente GT', text: 'La contraseña de tu cuenta fue actualizada. Si no reconoces este cambio, contacta al administrador.', html: '<h2>Contraseña actualizada</h2><p>La contraseña de tu cuenta fue actualizada. Si no reconoces este cambio, contacta al administrador.</p>' });
+  await sendSystemEmail({ userId: record.userId, to: record.user.email, category: 'PASSWORD_CHANGED', subject: 'Tu contraseña cambió — Vigente GT', text: 'La contraseña de tu cuenta fue actualizada. Si no reconoces este cambio, contacta al administrador.', html: emailTemplate({ eyebrow: 'Aviso de seguridad', title: 'Tu contraseña fue actualizada', intro: 'La contraseña de tu cuenta de Vigente GT cambió correctamente.', content: '<div style="padding:14px 16px;background:#fff0f0;border-left:4px solid #c84a4a;border-radius:4px;font:14px/21px Arial,sans-serif;color:#693c3c">Si no reconoces este cambio, contacta al responsable del servicio inmediatamente.</div>', actionLabel: 'Ir a Vigente GT', actionUrl: publicAppUrl, accent: '#c84a4a' }) });
   res.clearCookie('vigentegt_session', { ...cookieOptions, maxAge: undefined }).json({ message: 'Contraseña actualizada. Inicia sesión nuevamente.' });
 });
 
@@ -397,7 +409,13 @@ export async function sendReminder(documentId: string, reminderKey?: string) {
   if (!doc.user.emailVerifiedAt) throw new Error('El correo del usuario no está verificado.');
   const days = Math.ceil((doc.expiryDate.getTime() - Date.now()) / 86400000);
   const label = days < 0 ? 'Vencido' : days <= 30 ? 'Urgente' : 'Vence pronto';
-  const delivered = await sendSystemEmail({ userId: doc.userId, to: doc.user.email, category: 'REMINDER', subject: `${label}: ${doc.name} — Vigente GT`, text: `Tu ${doc.type === 'LICENCIA' ? 'Licencia' : 'DPI'} “${doc.name}” vence el ${doc.expiryDate.toISOString().slice(0, 10)}.`, html: `<h2>${label}</h2><p>Tu ${doc.type === 'LICENCIA' ? 'Licencia' : 'DPI'} “${doc.name}” vence el ${doc.expiryDate.toISOString().slice(0, 10)}.</p>` });
+  const documentType = doc.type === 'LICENCIA' ? 'Licencia de conducir' : 'DPI';
+  const documentName = escapeHtml(doc.name);
+  const formattedDate = new Intl.DateTimeFormat('es-GT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(doc.expiryDate);
+  const timing = days < 0 ? `Venció hace ${Math.abs(days)} ${Math.abs(days) === 1 ? 'día' : 'días'}` : days === 0 ? 'Vence hoy' : `Faltan ${days} ${days === 1 ? 'día' : 'días'}`;
+  const accent = days < 0 ? '#c84a4a' : days <= 30 ? '#d9822b' : '#2eaa8b';
+  const details = `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f7f9fc;border:1px solid #e1e8f0;border-radius:8px"><tr><td style="padding:18px 20px"><div style="font:11px Arial,sans-serif;letter-spacing:1px;text-transform:uppercase;color:#8293a8">Documento</div><div style="margin-top:5px;font:bold 16px Arial,sans-serif;color:#173e69">${escapeHtml(documentType)} · ${documentName}</div></td></tr><tr><td style="padding:0 20px 18px"><div style="font:11px Arial,sans-serif;letter-spacing:1px;text-transform:uppercase;color:#8293a8">Fecha de vencimiento</div><div style="margin-top:5px;font:bold 16px Arial,sans-serif;color:#173e69">${escapeHtml(formattedDate)}</div><div style="margin-top:8px;display:inline-block;padding:5px 9px;border-radius:12px;background:${accent}18;color:${accent};font:bold 12px Arial,sans-serif">${escapeHtml(timing)}</div></td></tr></table><p style="margin:16px 0 0;font:13px/20px Arial,sans-serif;color:#6b7e93">Te recomendamos iniciar la renovación con suficiente anticipación para evitar multas, restricciones o inconvenientes.</p>`;
+  const delivered = await sendSystemEmail({ userId: doc.userId, to: doc.user.email, category: 'REMINDER', subject: `${label}: ${doc.name} — Vigente GT`, text: `${label}. Tu ${documentType} “${doc.name}” vence el ${formattedDate}. ${timing}. Ingresa a ${publicAppUrl}`, html: emailTemplate({ eyebrow: `Alerta de vencimiento · ${label}`, title: days < 0 ? 'Tu documento está vencido' : days === 0 ? 'Tu documento vence hoy' : 'Tu documento vencerá pronto', intro: 'Este recordatorio fue programado desde tu cuenta de Vigente GT.', content: details, actionLabel: 'Revisar mis documentos', actionUrl: publicAppUrl, accent }) });
   const log = await prisma.notificationLog.create({ data: { documentId: doc.id, recipientEmail: doc.user.email, statusLabel: label, deliveryStatus: delivered ? 'SENT' : 'FAILED', reminderKey, errorMessage: delivered ? undefined : 'Consulta EmailDelivery para detalles.' } });
   return { log, delivered };
 }
