@@ -14,11 +14,14 @@ export default function LoginPage({ setView, onLoginSuccess }: LoginPageProps) {
   const [forgotMode,setForgotMode]=useState(false); const [message,setMessage]=useState('');
   const [mfaTicket,setMfaTicket]=useState(''); const [mfaCode,setMfaCode]=useState('');
   const [mfaSecondsLeft,setMfaSecondsLeft]=useState(0);
+  const [totpSecondsLeft,setTotpSecondsLeft]=useState(30);
 
   useEffect(() => {
     if (!mfaTicket) return;
     setMfaSecondsLeft(300);
+    setTotpSecondsLeft(30 - (Math.floor(Date.now() / 1000) % 30));
     const timer = window.setInterval(() => {
+      setTotpSecondsLeft(30 - (Math.floor(Date.now() / 1000) % 30));
       setMfaSecondsLeft(seconds => {
         if (seconds <= 1) {
           window.clearInterval(timer);
@@ -60,7 +63,7 @@ export default function LoginPage({ setView, onLoginSuccess }: LoginPageProps) {
           {message&&<div className="rounded border border-emerald-100 bg-emerald-50 p-3.5 text-xs text-emerald-700">{message}</div>}
           {!mfaTicket&&<label className="block text-[10px] font-mono font-bold text-slate-500 uppercase">Correo electrónico<div className="relative mt-2"><Mail className="absolute left-3.5 top-3 h-4 w-4 text-slate-400"/><input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full rounded border border-slate-200 bg-slate-50/40 py-2.5 pl-10 pr-4 text-sm" placeholder="ejemplo@correo.gt"/></div></label>}
           {!forgotMode&&!mfaTicket&&<PasswordInput label="Contraseña" value={password} onChange={setPassword} autoComplete="current-password" placeholder="••••••••••" />}
-          {mfaTicket&&<label className="block text-[10px] font-mono font-bold text-slate-500 uppercase">Código de autenticación o recuperación<input autoFocus required value={mfaCode} onChange={e=>setMfaCode(e.target.value)} autoComplete="one-time-code" inputMode="numeric" placeholder="123456" className="mt-2 w-full rounded border border-slate-200 p-3 text-center font-mono text-lg tracking-widest"/><span className={`mt-2 block text-center normal-case ${mfaSecondsLeft<=60?'text-red-600':'text-slate-500'}`}>Esta verificación vence en <strong className="font-mono">{mfaTime}</strong></span></label>}
+          {mfaTicket&&<label className="block text-[10px] font-mono font-bold text-slate-500 uppercase">Código de autenticación o recuperación<input autoFocus required value={mfaCode} onChange={e=>setMfaCode(e.target.value)} autoComplete="one-time-code" inputMode="numeric" placeholder="123456" className="mt-2 w-full rounded border border-slate-200 p-3 text-center font-mono text-lg tracking-widest"/><span className="mt-2 block text-center normal-case text-slate-600">El código de tu app cambia en <strong className="font-mono text-brand-teal">{totpSecondsLeft} s</strong></span><span className={`mt-1 block text-center normal-case ${mfaSecondsLeft<=60?'text-red-600':'text-slate-500'}`}>La sesión de verificación vence en <strong className="font-mono">{mfaTime}</strong></span><span className="mt-1 block text-center text-[9px] font-normal normal-case text-slate-400">Los códigos de recuperación no cambian cada 30 segundos.</span></label>}
           <button disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded bg-brand-teal py-3 text-xs font-mono font-bold text-white uppercase disabled:opacity-60"><LogIn className="h-4 w-4"/>{submitting ? 'Procesando…' : forgotMode?'Enviar enlace':mfaTicket?'Verificar código':'Iniciar sesión'}</button>
           {!mfaTicket&&<button type="button" onClick={()=>{setForgotMode(!forgotMode);setError('');setMessage('');}} className="w-full text-xs font-bold text-brand-blue">{forgotMode?'Volver al inicio de sesión':'¿Olvidaste tu contraseña?'}</button>}
           {mfaTicket&&<button type="button" onClick={()=>{setMfaTicket('');setMfaCode('');setError('');}} className="w-full text-xs font-bold text-brand-blue">Volver al inicio de sesión</button>}
