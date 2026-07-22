@@ -4,6 +4,7 @@ import { ViewType } from '../types';
 import { ArrowLeft, Download, KeyRound, Lock, ShieldCheck } from 'lucide-react';
 import PasswordInput from './PasswordInput';
 import { useToast } from './ToastProvider';
+import ConfirmDialog from './ConfirmDialog';
 
 interface SecurityPageProps {
   setView: (view: ViewType) => void;
@@ -19,16 +20,19 @@ export default function SecurityPage({ setView, isAdmin, mfaEnabled: initialMfaE
   const [mfaEnabled,setMfaEnabled]=useState(initialMfaEnabled); const [mfaPassword,setMfaPassword]=useState(''); const [mfaCode,setMfaCode]=useState(''); const [mfaError,setMfaError]=useState('');
   const [qrCode,setQrCode]=useState(''); const [manualKey,setManualKey]=useState(''); const [recoveryCodes,setRecoveryCodes]=useState<string[]>([]);
   const [disablePassword,setDisablePassword]=useState(''); const [disableCode,setDisableCode]=useState('');
+  const [showDeleteConfirm,setShowDeleteConfirm]=useState(false); const [deletingAccount,setDeletingAccount]=useState(false);
 
   const submit=async(event:FormEvent)=>{event.preventDefault();setError('');setMessage('');if(next!==confirmation)return setError('Las contraseñas no coinciden.');try{const result=await api.changePassword(current,next);setMessage(result.message);setCurrent('');setNext('');setConfirmation('');}catch(cause){setError(cause instanceof Error?cause.message:'No se pudo cambiar la contraseña.');}};
   const exportData=async()=>{try{const data=await api.exportAccount();const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`vigentegt-mis-datos-${new Date().toISOString().slice(0,10)}.json`;anchor.click();URL.revokeObjectURL(url);}catch(cause){toast(cause instanceof Error?cause.message:'No se pudieron descargar tus datos.','error');}};
-  const deleteAccount=async(event:FormEvent)=>{event.preventDefault();setDeleteError('');if(deleteConfirmation!=='ELIMINAR')return setDeleteError('Escribe ELIMINAR exactamente.');if(!confirm('Esta acción borrará definitivamente tu cuenta, documentos y alertas. ¿Deseas continuar?'))return;try{await api.deleteAccount(deletePassword,deleteConfirmation);onAccountDeleted();}catch(cause){setDeleteError(cause instanceof Error?cause.message:'No se pudo eliminar la cuenta.');}};
+  const deleteAccount=(event:FormEvent)=>{event.preventDefault();setDeleteError('');if(deleteConfirmation!=='ELIMINAR')return setDeleteError('Escribe ELIMINAR exactamente.');setShowDeleteConfirm(true);};
+  const confirmAccountDelete=async()=>{setDeletingAccount(true);try{await api.deleteAccount(deletePassword,deleteConfirmation);setShowDeleteConfirm(false);onAccountDeleted();}catch(cause){setShowDeleteConfirm(false);setDeleteError(cause instanceof Error?cause.message:'No se pudo eliminar la cuenta.');}finally{setDeletingAccount(false);}};
   const startMfa=async(event:FormEvent)=>{event.preventDefault();setMfaError('');try{const result=await api.setupMfa(mfaPassword);setQrCode(result.qrCode);setManualKey(result.manualKey);setMfaPassword('');}catch(cause){setMfaError(cause instanceof Error?cause.message:'No se pudo iniciar MFA.');}};
   const enableMfa=async(event:FormEvent)=>{event.preventDefault();setMfaError('');try{const result=await api.enableMfa(mfaCode);setRecoveryCodes(result.recoveryCodes);setMfaEnabled(true);setQrCode('');setManualKey('');setMfaCode('');toast('MFA fue activado correctamente.','success');}catch(cause){setMfaError(cause instanceof Error?cause.message:'No se pudo activar MFA.');}};
   const disableMfa=async(event:FormEvent)=>{event.preventDefault();setMfaError('');try{const result=await api.disableMfa(disablePassword,disableCode);toast(result.message,'success');setMfaEnabled(false);setDisablePassword('');setDisableCode('');}catch(cause){setMfaError(cause instanceof Error?cause.message:'No se pudo desactivar MFA.');}};
   const downloadRecoveryCodes=()=>{const url=URL.createObjectURL(new Blob([`Códigos de recuperación — Vigente GT\n\n${recoveryCodes.join('\n')}\n\nCada código funciona una sola vez.`],{type:'text/plain'}));const anchor=document.createElement('a');anchor.href=url;anchor.download='vigentegt-codigos-recuperacion.txt';anchor.click();URL.revokeObjectURL(url);};
 
   return <div className="mx-auto max-w-xl px-6 py-14">
+    <ConfirmDialog open={showDeleteConfirm} title="Eliminar tu cuenta definitivamente" description="Se borrarán tu cuenta, documentos, alertas, consentimientos y registros asociados. Esta acción no se puede deshacer." confirmLabel="Eliminar mi cuenta" busy={deletingAccount} onCancel={()=>setShowDeleteConfirm(false)} onConfirm={confirmAccountDelete}/>
     <button onClick={()=>setView(isAdmin?'admin':'dashboard')} className="mb-6 flex items-center gap-2 text-sm font-bold text-brand-teal"><ArrowLeft className="h-4 w-4"/>Volver</button>
     <div className="space-y-8">
       <div className={`geometric-card p-8 ${isAdmin&&!mfaEnabled?'border-amber-300 bg-amber-50/30':''}`}>

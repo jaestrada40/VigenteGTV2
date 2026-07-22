@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { User, Document, NotificationLog, ViewType } from '../types';
 import { getDocumentStatus } from './DashboardPage';
 import { Users, FileText, Send, Trash2, Calendar, AlertTriangle, ShieldCheck, Mail, Check, ArrowRight, RefreshCw, FileCheck } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface AdminPanelProps {
   users: User[];
@@ -24,6 +25,8 @@ export default function AdminPanel({
 }: AdminPanelProps) {
   const [toastMessage, setToastMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [pendingDelete,setPendingDelete]=useState<{kind:'user'|'document';id:string;title:string;description:string}|null>(null);
+  const [deleting,setDeleting]=useState(false);
 
   // 1. Calculate stats
   const totalUsersCount = users.filter(u => !u.isAdmin).length;
@@ -42,10 +45,11 @@ export default function AdminPanel({
   };
 
   const handleUserDelete = (user: User) => {
-    if (confirm(`¿Está seguro de que desea eliminar la cuenta de ${user.email}?\nSe borrarán todos sus documentos (${documents.filter(d => d.userId === user.id).length}) y dejará de recibir alertas de manera irreversible.`)) {
-      onDeleteUser(user.id);
-    }
+    const count=documents.filter(d => d.userId === user.id).length;
+    setPendingDelete({kind:'user',id:user.id,title:'Eliminar cuenta de usuario',description:`Se eliminará la cuenta de ${user.email}, sus ${count} documento${count===1?'':'s'} y todas sus alertas. Esta acción es irreversible.`});
   };
+
+  const confirmDelete=async()=>{if(!pendingDelete)return;setDeleting(true);try{if(pendingDelete.kind==='user')await onDeleteUser(pendingDelete.id);else await onDeleteDocument(pendingDelete.id);setPendingDelete(null);}finally{setDeleting(false);}};
 
   // Filter out actual admin user from standard lists if desired, or keep them
   const standardUsers = users.filter(u => !u.isAdmin && u.email.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -53,6 +57,7 @@ export default function AdminPanel({
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-10" id="admin-panel-container">
+      <ConfirmDialog open={Boolean(pendingDelete)} title={pendingDelete?.title||''} description={pendingDelete?.description||''} busy={deleting} onCancel={()=>setPendingDelete(null)} onConfirm={confirmDelete}/>
       
       {/* Toast Notification */}
       {toastMessage && (
@@ -328,11 +333,7 @@ export default function AdminPanel({
 
                             <button
                               id={`btn-admin-delete-doc-${doc.id}`}
-                              onClick={() => {
-                                if (confirm(`¿Eliminar este documento de ${doc.type} de ${doc.userEmail}?`)) {
-                                  onDeleteDocument(doc.id);
-                                }
-                              }}
+                              onClick={() => setPendingDelete({kind:'document',id:doc.id,title:'Eliminar documento',description:`Se eliminará el recordatorio de ${doc.type} “${doc.name}” perteneciente a ${doc.userEmail}. Dejará de recibir alertas para este documento.`})}
                               className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors cursor-pointer"
                               title="Borrar documento"
                             >
